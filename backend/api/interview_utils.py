@@ -11,7 +11,6 @@ from interview_engine.graph import (
 )
 from interview_engine import llm
 from langgraph.checkpoint.redis import RedisSaver
-from .stt_buffer import append_conversation_event
 load_dotenv()
 REDIS_URL = os.getenv("REDIS_URL")
 
@@ -32,7 +31,7 @@ def get_checkpointer():
             cp.setup()  # 연결 풀 및 키스페이스 준비
             _checkpointer = cp
             return _checkpointer
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             pass
 
     return _checkpointer

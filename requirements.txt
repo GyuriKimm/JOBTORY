@@ -19,10 +19,10 @@ redis==6.4.0
 ruff==0.14.8
 
 # langgraph
-langchain==1.1.0
+langchain==1.2.13
 langchain-community==0.4.1
 langchain-openai==1.1.0
-langgraph==1.0.4
+langgraph==1.1.8
 langgraph-checkpoint-redis==0.2.1
 langchain-tavily==0.2.15
 

@@ -97,9 +97,7 @@
 </template>
 
 <script setup>
-import { useRouter, RouterLink } from "vue-router";
-
-const router = useRouter();
+import { RouterLink } from "vue-router";
 
 const members = [
   { name: "김규리", role: "Project Manager", img: new URL("../assets/김규리.png", import.meta.url).href, github: "https://github.com/GyuriKimm" },

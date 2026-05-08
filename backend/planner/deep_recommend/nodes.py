@@ -1,4 +1,5 @@
-import json
+
+import logging
 
 from dotenv import load_dotenv
 from .state import RecommendState
@@ -9,6 +10,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from planner.deep_coach.utils import safe_json_parse
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
 
 
@@ -34,7 +36,7 @@ def report_analyzer(state: RecommendState) -> RecommendState:
         parsed = safe_json_parse(raw)
         state["needs_profile"] = parsed.get("needs_profile")
     except Exception as exc:
-        print(exc)
+        logger.exception("report_analyzer failed: %s", exc)
 
     return state
 
@@ -53,7 +55,7 @@ def slot_planner(state: RecommendState) -> RecommendState:
         state["slots"] = parsed.get("slots")
 
     except Exception as exc:
-        print(exc)
+        logger.exception("slot_planner failed: %s", exc)
 
     return state
 
@@ -74,10 +76,11 @@ def video_selector(state: RecommendState) -> RecommendState:
         parsed = safe_json_parse(raw)
         candidates = parsed.get("candidates") or []
         state["candidates"] = candidates
-        print(f"[video_selector] candidates={len(candidates)}", flush=True)
-        print(f"[video_selector] candidates={candidates[0]}", flush=True)
+        logger.info("video_selector candidates=%s", len(candidates))
+        if candidates:
+            logger.info("video_selector first_candidate=%s", candidates[0])
     except Exception as exc:
-        print(f"[video_selector] error: {exc}", flush=True)
+        logger.exception("video_selector failed: %s", exc)
 
     return state
 
@@ -99,7 +102,7 @@ def plan_builder(state: RecommendState) -> RecommendState:
         topic = slot.get("day_plan_topic")
         category = slot.get("category") or ""
         domain = slot.get("domain") or ""
-        why_selected = slot.get("reason") 
+        why_selected = slot.get("reason")
         cand = cand_by_day.get(day) or {}
         video = cand.get("video") or {}
         raw_id = video.get("id")
@@ -121,5 +124,5 @@ def plan_builder(state: RecommendState) -> RecommendState:
         )
 
     state["final_plan"] = final_plan
-    print(f"[plan_builder] slots={len(slots)} final_plan={len(final_plan)}", flush=True)
+    logger.info("plan_builder slots=%s final_plan=%s", len(slots), len(final_plan))
     return state

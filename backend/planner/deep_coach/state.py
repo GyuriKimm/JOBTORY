@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Literal, TypedDict,Optional
+from typing import Dict, List, Literal, TypedDict
 
 CompletionLevel = Literal["COMPLETE", "POLISH", "NEEDS_WORK"]
 

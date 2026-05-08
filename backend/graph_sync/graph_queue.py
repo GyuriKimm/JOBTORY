@@ -1,8 +1,11 @@
+import logging
 import threading
 from queue import Queue, Empty
 
 from django.core.cache import cache
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 _QUEUE = Queue()
@@ -58,7 +61,7 @@ def _run():
             elif task == "algo_similarity":
                 _task_algo_similarity()
         except Exception as exc:
-            print(f"[graph_sync] task failed ({task}): {exc}", flush=True)
+            logger.exception("graph_sync task failed (%s): %s", task, exc)
         finally:
             _QUEUE.task_done()
 

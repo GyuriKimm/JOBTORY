@@ -4,4 +4,4 @@ if (!API_BASE) {
   throw new Error("VITE_API_BASE is required");
 }
 
-export default API_BASE;
+export default API_BASE.replace(/\/+$/, "");

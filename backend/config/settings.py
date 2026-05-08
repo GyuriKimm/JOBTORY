@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env_path = BASE_DIR.parent / ".env"
 load_dotenv(env_path)
 
+
 def _get_env_any(*names: str) -> str:
     for name in names:
         value = os.getenv(name)
@@ -19,8 +20,13 @@ def _get_env_any(*names: str) -> str:
 
 SECRET_KEY = _get_env_any("DJANGO_SECRET_KEY")
 DEBUG = os.getenv("DJANGO_DEBUG", "").lower() == "true"
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",") if os.getenv("DJANGO_ALLOWED_HOSTS") else []
+ALLOWED_HOSTS = (
+    os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",")
+    if os.getenv("DJANGO_ALLOWED_HOSTS")
+    else []
+)
 FRONTEND_BASE_URL = _get_env_any("FRONTEND_BASE_URL")
+FRONTEND_BASE_ORIGIN = FRONTEND_BASE_URL.rstrip("/")
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -87,7 +93,9 @@ DATABASES = {
 }
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
@@ -105,7 +113,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOWED_ORIGINS = [FRONTEND_BASE_URL]
+CORS_ALLOWED_ORIGINS = [FRONTEND_BASE_ORIGIN]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -133,13 +141,17 @@ REST_FRAMEWORK = {
 ELASTICSEARCH_HOST = _get_env_any("ELASTICSEARCH_HOST")
 
 # Email 설정 (기본은 콘솔 출력)
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_BACKEND = os.getenv(
+    "EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend"
+)
 EMAIL_HOST = os.getenv("EMAIL_HOST", "")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@jobtory.local")
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@jobtory.local"
+)
 
 # Google OAuth 설정
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")

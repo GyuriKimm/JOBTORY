@@ -1,16 +1,10 @@
-import json
 import time
 
-import cv2
-import mediapipe as mp
-import numpy as np
 from django.core.cache import cache
 from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from .analyzer import analyze_frame, _face_count_from_bytes
 
 
 class CheatAnalysisView(APIView):
@@ -26,6 +20,8 @@ class CheatAnalysisView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
+        from .analyzer import analyze_frame
+
         session_id = request.query_params.get("session_id")
         file = request.FILES.get("image")
         if not file:
@@ -91,6 +87,8 @@ class FacePresenceView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
+        from .analyzer import _face_count_from_bytes
+
         file = request.FILES.get("image")
         if not file:
             return Response(

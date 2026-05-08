@@ -1,7 +1,10 @@
+import logging
 import os
 import sys
 
 import django
+
+logger = logging.getLogger(__name__)
 
 
 def _setup_django():
@@ -24,7 +27,11 @@ def main():
         try:
             sync_report_to_graph(report, report.user, report.graph_output or {})
         except Exception as exc:
-            print(f"[graph_sync] report sync failed: {report.session_id} {exc}", flush=True)
+            logger.exception(
+                "graph_sync report sync failed: session_id=%s error=%s",
+                report.session_id,
+                exc,
+            )
 
     update_all_user_similarity(top_k=20)
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from django.conf import settings
 from langgraph.checkpoint.redis import RedisSaver

@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,7 +10,9 @@ from .models import UserGrowthInsight
 from django.db.utils import ProgrammingError
 from planner.growth_report.graph import run_growth_report
 from planner.growth_report.utils import append_growth_state
-from api.views import _to_kst_iso
+from api.utils import _to_kst_iso
+
+logger = logging.getLogger(__name__)
 
 
 class UserReportsPayloadView(APIView):
@@ -173,7 +177,7 @@ class DeepAgentReportView(APIView):
                 )
                 latest_created_at = _to_kst_iso(getattr(obj, "created_at", None))
             except Exception as e:
-                print(f"[DeepAgentReportView] append_growth_state failed: {e}", flush=True)
+                logger.exception("DeepAgentReportView append_growth_state failed: %s", e)
                 return Response({"detail": "에이전트 실행에 실패했습니다.", "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         elif run_mode== "cached":
@@ -187,7 +191,7 @@ class DeepAgentReportView(APIView):
                 )
                 latest_created_at = _to_kst_iso(getattr(latest, "created_at", None))
             except Exception as e:
-                print(f"[DeepAgentReportView] cached branch failed: {e}", flush=True)
+                logger.exception("DeepAgentReportView cached branch failed: %s", e)
                 return Response({"detail": "에이전트 실행에 실패했습니다.", "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         elif run_mode=="incremental":
@@ -205,7 +209,7 @@ class DeepAgentReportView(APIView):
                 latest_created_at = _to_kst_iso(getattr(obj, "created_at", None))
 
             except Exception as e:
-                print(f"[DeepAgentReportView] append_growth_state failed: {e}", flush=True)
+                logger.exception("DeepAgentReportView append_growth_state failed: %s", e)
 
         return Response(
                 {

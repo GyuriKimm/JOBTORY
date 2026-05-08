@@ -3,8 +3,6 @@ from langchain_core.tools import tool
 from dotenv import load_dotenv
 from deepagents import create_deep_agent as build_deep_agent
 from langchain_openai import ChatOpenAI
-import json
-import re
 load_dotenv()
 
 DEFAULT_MODEL_NAME = "gpt-5-nano"

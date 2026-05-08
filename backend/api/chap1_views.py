@@ -3,7 +3,7 @@ from django.core.cache import cache
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .interview_utils import get_cached_graph, get_cached_llm, _generate_tts_payload
+from .interview_utils import get_cached_graph, get_cached_llm
 from .models import (
     CodingProblemLanguage,
     User,
@@ -19,21 +19,23 @@ class WarmupLanggraphView(APIView):
         try:
             # LLM 모듈 import 및 그래프 컴파일 시도
             llm_instance = get_cached_llm()
-            _ = llm_instance   # LLM은 존재 확인
-        
+            _ = llm_instance  # LLM은 존재 확인
+
             graph1 = get_cached_graph(name="chapter1")
             graph1.get_graph()  # 실제 실행은 하지 않고 DAG만 준비
             return Response(
                 {
                     "status": "warmed",
-                }, 
-                status=status.HTTP_200_OK)
-        
+                },
+                status=status.HTTP_200_OK,
+            )
+
         except Exception as exc:  # noqa: BLE001
             return Response(
                 {"status": "error", "detail": str(exc)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
 
 class LiveCodingPreloadView(APIView):
     """
@@ -66,12 +68,21 @@ class LiveCodingPreloadView(APIView):
 
         if not problem_lang:
             detail = f"요청한 언어({language})의 문제를 찾을 수 없습니다."
-            return Response({"detail": detail}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {
+                    "code": "seed_required",
+                    "detail": detail,
+                    "language": language,
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         problem = problem_lang.problem
         test_cases = [
             {"id": tc.id, "input": tc.input_data, "output": tc.output_data}
-            for tc in (problem.test_cases.all() if hasattr(problem, "test_cases") else [])
+            for tc in (
+                problem.test_cases.all() if hasattr(problem, "test_cases") else []
+            )
         ]
 
         return Response(
@@ -84,11 +95,12 @@ class LiveCodingPreloadView(APIView):
                 "function_name": problem_lang.function_name,
                 "starter_code": problem_lang.starter_code,
                 "test_cases": test_cases,
-                "algorithm":  problem.algorithm
+                "algorithm": problem.algorithm,
             },
             status=status.HTTP_200_OK,
         )
-        
+
+
 class CodingProblemTextInitView(APIView):
     """
     인트로용 tts_text(텍스트만)를 반환하는 경량 엔드포인트.
@@ -112,13 +124,13 @@ class CodingProblemTextInitView(APIView):
         problem_text = ""
         if isinstance(payload.get("problem"), str):
             problem_text = payload["problem"]
-            
+
         user_id = request.user.user_id if hasattr(request, "user") else None
 
         session_id = None
         if isinstance(request.data, dict):
             session_id = request.data.get("session_id")
- 
+
         init_state = {
             "meta": {
                 "user_id": user_id,
@@ -130,18 +142,14 @@ class CodingProblemTextInitView(APIView):
         }
         intro_text = ""
         try:
-            graph = get_cached_graph(name ="chapter1")
+            graph = get_cached_graph(name="chapter1")
             graph_state = graph.invoke(
                 init_state,
-                config={
-                    "configurable": {
-                        "thread_id": f"{session_id}:chapter1"
-                    }
-                },
+                config={"configurable": {"thread_id": f"{session_id}:chapter1"}},
             )
             if isinstance(graph_state, dict):
                 intro_text = graph_state.get("tts_text") or ""
-        
+
         except Exception as exc:  # noqa: BLE001
             return Response(
                 {
@@ -185,7 +193,9 @@ class InterviewIntroEventView(APIView):
 
         if not session_id:
             return Response(
-                {"detail": "session_id를 body, 쿼리스트링 또는 X-Session-Id 헤더로 전달해 주세요."},
+                {
+                    "detail": "session_id를 body, 쿼리스트링 또는 X-Session-Id 헤더로 전달해 주세요."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         if not stt_text:
@@ -214,18 +224,12 @@ class InterviewIntroEventView(APIView):
                 }
                 coding_result = coding_graph.invoke(
                     coding_state,
-                    config={
-                        "configurable": {
-                            "thread_id": f"{session_id}:chapter2"
-                        }
-                    },
+                    config={"configurable": {"thread_id": f"{session_id}:chapter2"}},
                 )
                 reply_tts = (coding_result.get("tts_text") or "").strip()
             except Exception:
                 # LangGraph 호출 실패 시에도 기본 멘트로 폴백
-                reply_tts = (
-                    "답변 잘 들었습니다. 이제 다시 문제 풀이를 이어가 주세요."
-                )
+                reply_tts = "답변 잘 들었습니다. 이제 다시 문제 풀이를 이어가 주세요."
 
             return Response(
                 {
@@ -248,11 +252,7 @@ class InterviewIntroEventView(APIView):
         try:
             result_state = graph.invoke(
                 update_state,
-                config={
-                    "configurable": {
-                        "thread_id":f"{session_id}:chapter1"
-                    }
-                },
+                config={"configurable": {"thread_id": f"{session_id}:chapter1"}},
             )
         except Exception as exc:  # noqa: BLE001
             return Response(
@@ -264,7 +264,9 @@ class InterviewIntroEventView(APIView):
         tts_text = (result_state.get("tts_text") or "").strip()
 
         # TTS는 별도 엔드포인트(TTSView)에서 호출하도록 분리
-        user_answer_class = (result_state.get("user_answer_class") or "").strip() or None
+        user_answer_class = (
+            result_state.get("user_answer_class") or ""
+        ).strip() or None
 
         # intro / 전략 답변 분기 흐름이 어느 정도 마무리된 상태인지 여부.
         # 그래프에서 intro_flow_done을 명시적으로 내려주지 않는 경우가 있어,
@@ -273,7 +275,11 @@ class InterviewIntroEventView(APIView):
         intro_flow_done_flag = bool(result_state.get("intro_flow_done"))
         if not intro_flow_done_flag:
             non_strategy_count = int(result_state.get("intro_non_strategy_count") or 0)
-            if user_answer_class and user_answer_class != "strategy" and non_strategy_count >= 1:
+            if (
+                user_answer_class
+                and user_answer_class != "strategy"
+                and non_strategy_count >= 1
+            ):
                 intro_flow_done_flag = True
 
         # stage는 meta 기준으로 결정 (intro -> coding 단방향)
@@ -299,14 +305,10 @@ class InterviewIntroEventView(APIView):
                 }
                 coding_result = coding_graph.invoke(
                     coding_state,
-                    config={
-                        "configurable": {
-                            "thread_id": f"{session_id}:chapter2"
-                        }
-                    },
+                    config={"configurable": {"thread_id": f"{session_id}:chapter2"}},
                 )
                 coding_intro_text = (coding_result.get("tts_text") or "").strip()
-            except Exception as exc:
+            except Exception:
                 # LangGraph 쪽에서 문제가 나더라도 코딩 인트로 멘트는 반드시 한 번 재생되도록
                 # 간단한 폴백 멘트를 설정해 둔다.
                 coding_intro_text = (

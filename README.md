@@ -483,10 +483,15 @@ uv pip install -r requirements.txt
 
 cd backend
 python manage.py migrate
-python manage.py makemigrations api
-python manage.py makemigrations planner
+python manage.py seed_coding_problems --reset
+python manage.py run_graph_sync_worker
 python manage.py runserver
 ```
+
+- `migrate`는 이미 커밋된 Django migration을 DB에 적용합니다.
+- `seed_coding_problems`는 `docker/csv_files`의 코딩 문제/테스트케이스/추천 영상 데이터를 적재합니다.
+- `run_graph_sync_worker`는 `graph_sync` 비동기 작업을 수동 워커 프로세스로 실행합니다.
+- 기존 `docker/data_db.py`도 유지되며, 내부적으로 같은 seed 로직을 사용합니다.
 
 ### 2) Frontend
 
@@ -498,3 +503,8 @@ npm run dev
 
 이후 브라우저에서 `http://localhost:5174/` 로 접속해  
 환경 설정 페이지 → 라이브 코딩 페이지로 진입하면 JobTory 라이브 코딩 인터뷰를 테스트할 수 있습니다.
+
+참고:
+- `preload` 단계에서 `"code": "seed_required"` 응답이 나오면, 코딩 문제 seed가 아직 안 된 상태입니다.
+- 이 경우 `python manage.py seed_coding_problems --reset`를 먼저 실행하세요.
+- `VITE_API_BASE`와 `FRONTEND_BASE_URL`은 trailing slash 없이 적어도 동작합니다. 현재 코드는 끝의 `/`를 정규화합니다.

@@ -1,4 +1,7 @@
+import logging
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_problem_algorithms(graph_output: Dict[str, Any]) -> List[str]:
@@ -46,7 +49,7 @@ def ensure_graph_sources():
     try:
         ensure_problem_documents()
     except Exception as exc:
-        print(f"[graph_sync] ES bootstrap failed: {exc}", flush=True)
+        logger.exception("graph_sync ES bootstrap failed: %s", exc)
 
 
 def sync_report_to_graph(report, user, graph_output: Dict[str, Any]) -> None:

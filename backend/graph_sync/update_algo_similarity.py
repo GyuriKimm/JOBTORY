@@ -1,9 +1,12 @@
+import logging
 import argparse
 import os
 import sys
 from pathlib import Path
 
 import django
+
+logger = logging.getLogger(__name__)
 
 
 def _setup_django():
@@ -33,7 +36,7 @@ def main():
         sigmoid_scale=args.sigmoid_scale,
         include_reports=args.include_reports,
     )
-    print(f"[algo_similarity] updated edges: {count}")
+    logger.info("algo_similarity updated edges: %s", count)
 
 if __name__ == "__main__":
     main()

@@ -1,17 +1,20 @@
 # backend/stt/views.py
-import os
 import logging
+import os
+from functools import lru_cache
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.core.cache import cache
 
-from api.stt_buffer import append_conversation_event
 from .stt_client import STTClient
 
 logger = logging.getLogger(__name__)
 
-# 한 번만 만들어서 재사용 (매 요청마다 로딩하지 않도록)
-stt_client = STTClient(model_size="base")
+
+@lru_cache(maxsize=1)
+def _get_stt_client() -> STTClient:
+    """STT 클라이언트를 요청 시점에 1회만 생성해 재사용합니다."""
+    return STTClient(model_size="base")
 
 
 @csrf_exempt
@@ -35,6 +38,7 @@ def transcribe_only(request):
         logger.info("trimmed webm to %s bytes", len(webm_bytes))
 
     try:
+        stt_client = _get_stt_client()
         lines = stt_client.transcribe_pcm_sync(webm_bytes)
         logger.info("stt lines=%s", lines)
         text = " ".join(
@@ -49,6 +53,12 @@ def transcribe_only(request):
                 "stt_text": text,
             },
             status=200,
+        )
+    except RuntimeError as exc:
+        logger.exception("STT client is unavailable: %s", exc)
+        return JsonResponse(
+            {"error": "stt_unavailable", "detail": str(exc)},
+            status=503,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("STT transcribe_only failed: %s", exc)

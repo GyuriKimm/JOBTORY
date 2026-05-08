@@ -101,7 +101,7 @@ def jwt_required(func):
                 {"detail": "유효하지 않은 토큰입니다."},
                 status=status.HTTP_401_UNAUTHORIZED
             )
-        except Exception as e:
+        except Exception:
             return Response(
                 {"detail": "인증 처리 중 오류가 발생했습니다."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

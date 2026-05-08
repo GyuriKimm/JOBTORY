@@ -7,7 +7,6 @@ from django.db.utils import ProgrammingError
 from typing import Any, Dict, List
 from langchain_core.messages import SystemMessage, HumanMessage
 from interview_engine.llm import get_llm
-from .state import ReportState
 
 def _call_llm(system_prompt: str, user_prompt: str) -> str:
     model = get_llm("report")

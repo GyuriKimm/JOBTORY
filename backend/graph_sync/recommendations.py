@@ -52,19 +52,9 @@ def _neo4j_recommend_problem_ids(user_id: str, limit: int, difficulties: list) -
         "ORDER BY score DESC "
         "LIMIT $limit"
     )
-    payload = {
-        "statements": [
-            {
-                "statement": query,
-                "parameters": {
-                    "user_id": user_id,
-                    "limit": limit,
-                    "difficulties": difficulties,
-                },
-            }
-        ]
-    }
-    data = post_cypher(query, {"user_id": user_id, "limit": limit, "difficulties": difficulties})
+    data = post_cypher(
+        query, {"user_id": user_id, "limit": limit, "difficulties": difficulties}
+    )
     errors = data.get("errors") or []
     if errors:
         return []
@@ -78,7 +68,9 @@ def _neo4j_recommend_problem_ids(user_id: str, limit: int, difficulties: list) -
     return problem_ids
 
 
-def _fallback_problem_ids_by_algos(algorithms: list, difficulties: list, limit: int) -> list:
+def _fallback_problem_ids_by_algos(
+    algorithms: list, difficulties: list, limit: int
+) -> list:
     if not algorithms:
         return []
     query = (
@@ -99,7 +91,9 @@ def _fallback_problem_ids_by_algos(algorithms: list, difficulties: list, limit: 
     return [r.get("row")[0] for r in rows if r.get("row")]
 
 
-def _fallback_problem_ids_by_category(categories: list, difficulties: list, limit: int) -> list:
+def _fallback_problem_ids_by_category(
+    categories: list, difficulties: list, limit: int
+) -> list:
     if not categories:
         return []
     query = (
@@ -166,7 +160,9 @@ def _es_hybrid_rerank(
                 }
             },
         },
-        "rank": {"rrf": {"window_size": max(50, len(problem_ids)), "rank_constant": 60}},
+        "rank": {
+            "rrf": {"window_size": max(50, len(problem_ids)), "rank_constant": 60}
+        },
     }
 
     status, body_resp = es_request("POST", f"{index_name}/_search", body)
@@ -203,7 +199,9 @@ def _problem_payloads(problem_ids: list, language: str, limit: int) -> list:
         problem = problem_lang.problem
         test_cases = [
             {"id": tc.id, "input": tc.input_data, "output": tc.output_data}
-            for tc in (problem.test_cases.all() if hasattr(problem, "test_cases") else [])
+            for tc in (
+                problem.test_cases.all() if hasattr(problem, "test_cases") else []
+            )
         ]
         payloads.append(
             {

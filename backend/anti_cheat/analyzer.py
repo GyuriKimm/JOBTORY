@@ -11,30 +11,6 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 
-
-_mp_face_mesh  = mp.solutions.face_mesh
-
-# 5초 샷이더라도 "객체 재사용"은 이득 큼
-_FACE_MESH = _mp_face_mesh.FaceMesh(
-    static_image_mode=True,     # 스냅샷 처리
-    max_num_faces=1,
-    refine_landmarks=True,      # iris 필요하면 True
-    min_detection_confidence=0.5,
-)
-
-# -----------------------------
-# ML / feature 정의
-# -----------------------------
-FEATURE_ORDER = [
-    "pitch",
-    "yaw",
-    "roll",
-    "face_count",
-    "face_visible",
-    "gaze_lr_ratio",
-    "gaze_ud_ratio",
-]
-
 ML_THRESHOLD = 0.8
 
 # -----------------------------
@@ -62,6 +38,18 @@ RIGHT_IRIS = [469, 470, 471, 472]
 # 눈 좌우 코너
 LEFT_EYE_CORNERS  = (33, 133)     # outer, inner
 RIGHT_EYE_CORNERS = (362, 263)    # outer, inner
+
+
+@lru_cache(maxsize=1)
+def _get_face_mesh():
+    """FaceMesh를 요청 시점에 1회만 생성해 재사용합니다."""
+    return mp.solutions.face_mesh.FaceMesh(
+        static_image_mode=True,  # 스냅샷 처리
+        max_num_faces=1,
+        refine_landmarks=True,  # iris 필요하면 True
+        min_detection_confidence=0.5,
+    )
+
 
 @dataclass
 class CheatAnalysisResult:
@@ -149,14 +137,6 @@ def _get_head_pose(lm, width: int, height: int) -> Tuple[float, float, float]:
 
     pitch, yaw, roll = euler.flatten()[:3]
     return float(pitch), float(yaw), float(roll)
-
-import numpy as np
-
-LEFT_IRIS  = [474, 475, 476, 477]
-RIGHT_IRIS = [469, 470, 471, 472]
-
-LEFT_EYE_CORNERS  = (33, 133)     # outer, inner
-RIGHT_EYE_CORNERS = (362, 263)    # outer, inner
 LEFT_EYE_TOP, LEFT_EYE_BOTTOM = 159, 145
 RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM = 386, 374
 
@@ -290,7 +270,7 @@ def analyze_frame(image_bytes: bytes) -> CheatAnalysisResult:
     img_bgr = _decode_image(image_bytes)
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     height, width, _ = img_bgr.shape
-    result = _FACE_MESH.process(img_rgb)
+    result = _get_face_mesh().process(img_rgb)
 
     if not result.multi_face_landmarks:
         # 얼굴/눈 랜드마크를 아예 잡지 못하면 자리 이탈로 간주

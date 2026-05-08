@@ -90,20 +90,21 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    command: >
-      bash -c "
+    command:
+      - bash
+      - -ec
+      - >
         echo 'Waiting for Elasticsearch to be ready...';
-        until curl -s -u elastic:${ELASTIC_PASSWORD} http://elasticsearch:9200/_cluster/health | grep -q 'yellow\\|green'; do
+        until curl -s -u elastic:${ELASTIC_PASSWORD} http://elasticsearch:9200/_cluster/health | grep -q 'yellow\|green'; do
           sleep 5;
         done;
         echo 'Setting kibana_system password...';
-        curl -X POST -u elastic:${ELASTIC_PASSWORD} \
-          http://elasticsearch:9200/_security/user/kibana_system/_password \
-          -H 'Content-Type: application/json' \
-          -d \"{\\\"password\\\":\\\"${KIBANA_PASSWORD}\\\"}\";
+        curl -sS -X POST -u elastic:${ELASTIC_PASSWORD}
+        -H 'Content-Type: application/json'
+        --data "{\"password\":\"${KIBANA_PASSWORD}\"}"
+        http://elasticsearch:9200/_security/user/kibana_system/_password;
         echo '';
         echo 'kibana_system password has been set successfully!';
-      "
     restart: "no"
 
   kibana:

@@ -11,7 +11,7 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 
-ML_THRESHOLD = 0.8
+ML_THRESHOLD = 0.9
 
 # -----------------------------
 # Head pose 모델/랜드마크
@@ -273,17 +273,17 @@ def analyze_frame(image_bytes: bytes) -> CheatAnalysisResult:
     result = _get_face_mesh().process(img_rgb)
 
     if not result.multi_face_landmarks:
-        # 얼굴/눈 랜드마크를 아예 잡지 못하면 자리 이탈로 간주
+        # 단일 프레임에서 얼굴을 놓치는 경우는 흔한 노이즈라 즉시 부정행위로 보지 않습니다.
         return CheatAnalysisResult(
-            is_cheating=True,
-            reason="현재 얼굴 인식이 되지 않습니다. 화면 중앙에 얼굴을 맞춰 주세요.",
-            detail_reason="얼굴을 인식할 수 없습니다.",
+            is_cheating=False,
+            reason="얼굴 인식이 일시적으로 불안정합니다. 화면 중앙에 얼굴을 맞춰 주세요.",
+            detail_reason="face_not_detected",
             face_count=0,
-            raw_score=1.0,
+            raw_score=0.0,
         )
     
     face_count = len(result.multi_face_landmarks)
-    # 두 명 이상 감지되면 동반자 존재 가능성으로 바로 부정행위 처리
+    # 두 명 이상 감지되면 명확한 이상 상황으로 판단합니다.
     if face_count > 1:
         return CheatAnalysisResult(
             is_cheating=True,
@@ -311,13 +311,13 @@ def analyze_frame(image_bytes: bytes) -> CheatAnalysisResult:
         # 실시간 단일 프레임에서는 누적값을 갖고 있지 않으므로 off_center를 그대로 사용
         off_center_streak = off_center
     except Exception:
-        # 계산 실패 시 보수적으로 부정행위로 간주
+        # 포즈 계산 실패도 단일 프레임의 흔들림일 수 있어 즉시 누적하지 않습니다.
         return CheatAnalysisResult(
-            is_cheating=True,
-            reason="머리 방향/시선을 계산할 수 없습니다.",
+            is_cheating=False,
+            reason="머리 방향/시선을 안정적으로 계산할 수 없습니다.",
             detail_reason="pose_calc_failed",
             face_count=1,
-            raw_score=1.0,
+            raw_score=0.0,
         )
 
     features = {

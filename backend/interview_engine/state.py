@@ -13,6 +13,10 @@ class IntroState(TypedDict, total=False):
     
     intro_text: str             # 문제 읽어주는 멘트(smalltalk + 문제 설명)
     user_strategy_answer: str   # 사용자의 전략 답변
+    user_strategy_answer_raw: str
+    user_strategy_answer_normalized: str
+    strategy_algorithms: List[str]
+    strategy_confidence: float
     user_answer_class: Literal[
         "irrelevant",               # 대답 안 함 / 너무 짧음
         "strategy",                # 풀이 전략 설명

@@ -1,8 +1,13 @@
+import logging
 import json
 from typing import Literal
 from langchain_core.messages import SystemMessage, HumanMessage
 from interview_engine.state import IntroState
 from interview_engine.llm import get_llm
+from interview_engine.utils.strategy_normalizer import normalize_strategy_answer
+
+
+logger = logging.getLogger(__name__)
 
 AnswerClass = Literal["irrelevant", "strategy", "problem_question"]
 
@@ -48,8 +53,8 @@ def answer_classify_agent(state: IntroState) -> IntroState:
     ]
 
     try:
-        print("[LLM][answer_classify_agent] system_prompt:", system_prompt, flush=True)
-        print("[LLM][answer_classify_agent] user_prompt:", user_prompt, flush=True)
+        logger.debug("answer_classify system_prompt=%s", system_prompt)
+        logger.debug("answer_classify user_prompt=%s", user_prompt)
         model = get_llm("classify")
         resp = model.invoke(messages)
         content = getattr(resp, "content", resp)
@@ -64,7 +69,16 @@ def answer_classify_agent(state: IntroState) -> IntroState:
     answer_class: AnswerClass = parsed.get("answer_class", "irrelevant")
     if answer_class == "strategy":
         state["user_answer_class"] = answer_class
-        state["user_strategy_answer"] = user_text
+        strategy_result = normalize_strategy_answer(
+            user_text,
+            problem_text=problem_text,
+            problem_algorithms=state.get("real_algorithm_category") or state.get("problem_algorithms"),
+        )
+        state["user_strategy_answer_raw"] = strategy_result.raw_text
+        state["user_strategy_answer_normalized"] = strategy_result.normalized_text
+        state["strategy_algorithms"] = strategy_result.algorithm_tags
+        state["strategy_confidence"] = strategy_result.confidence
+        state["user_strategy_answer"] = strategy_result.normalized_text
         state["intro_non_strategy_count"] = 0
         state["event_type"] = "coding_intro"
     else:

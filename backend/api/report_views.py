@@ -10,8 +10,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from zoneinfo import ZoneInfo
 
-from api.models import CodingProblem, LivecodingReport, User
+from api.models import LivecodingReport, User
 from .authentication import JWTAuthentication
+from .report_utils import (
+    build_problem_payload,
+    clear_livecoding_session_cache,
+    resolve_problem_text,
+    resolve_problem_text_from_db,
+    serialize_livecoding_report,
+)
+from .session_utils import require_livecoding_owner
+from interview_engine.utils.strategy_normalizer import normalize_strategy_answer
 from .utils import _to_kst_iso
 from .interview_utils import get_cached_graph
 from .stt_buffer import clear_utterances
@@ -179,38 +188,7 @@ class LiveCodingFinalEvalReportView(APIView):
                 except Exception as exc:
                     logger.exception("report queue failed: %s", exc)
                 return Response(
-                    {
-                        "status": "done",
-                        "step": "saved",
-                        "final_report_markdown": report.report_md or "",
-                        "final_score": report.final_score,
-                        "final_grade": report.final_grade,
-                        "problem_text": (report.problem or {}).get("problem_text")
-                        if hasattr(report, "problem")
-                        else None,
-                        "code_feedback": report.code_feedback,
-                        "problem_solving_evaluation": report.problem_solving_evaluation,
-                        "initial_strategy": report.initial_strategy,
-                        "approach_validity": report.approach_validity,
-                        "consistency_status": report.consistency_status,
-                        "consistency_feedback": report.consistency_feedback,
-                        "submitted_code": report.submitted_code,
-                        "annotated_code": report.annotated_code,
-                        "strength": report.strength,
-                        "improvement": report.improvement,
-                        "comprehensive_evaluation": report.comprehensive_evaluation,
-                        "anti_cheat_summary": report.anti_cheat_summary,
-                        "graph_output": graph_output,
-                        "problem_eval_score": report.problem_eval_score,
-                        "problem_eval_feedback": report.problem_eval_feedback,
-                        "code_collab_score": report.code_collab_score,
-                        "code_collab_feedback": report.code_collab_feedback,
-                        "problem_evidence": report.problem_evidence,
-                        "code_collab_evidence": report.code_collab_evidence,
-                        "created_at": _to_kst_iso(report.created_at),
-                        "updated_at": _to_kst_iso(report.updated_at),
-                    },
-                    status=status.HTTP_200_OK,
+                    serialize_livecoding_report(report), status=status.HTTP_200_OK
                 )
             return Response(
                 {"detail": "해당 세션 정보를 찾을 수 없습니다."},
@@ -251,52 +229,7 @@ class LiveCodingFinalEvalReportView(APIView):
 
         if not graph_output.get("problem_text"):
             try:
-                problem_text = None
-
-                if isinstance(meta, dict):
-                    problem_text = (
-                        meta.get("problem_text")
-                        or meta.get("problem_description")
-                        or meta.get("problem")
-                    )
-
-                if not problem_text:
-                    meta_key = f"livecoding:{session_id}:meta"
-                    cached_meta = cache.get(meta_key) or {}
-                    if isinstance(cached_meta, dict):
-                        problem_text = (
-                            cached_meta.get("problem_text")
-                            or cached_meta.get("problem_description")
-                            or cached_meta.get("problem")
-                        )
-                        if not problem_text:
-                            pd = (
-                                cached_meta.get("problem_payload")
-                                or cached_meta.get("problem_data")
-                                or {}
-                            )
-                            if isinstance(pd, dict):
-                                problem_text = (
-                                    pd.get("problem")
-                                    or pd.get("problem_text")
-                                    or pd.get("problem_description")
-                                )
-
-                if not problem_text:
-                    for k in (
-                        f"livecoding:{session_id}:problem",
-                        f"livecoding:{session_id}:problem_data",
-                    ):
-                        pd = cache.get(k) or {}
-                        if isinstance(pd, dict):
-                            problem_text = (
-                                pd.get("problem")
-                                or pd.get("problem_text")
-                                or pd.get("problem_description")
-                            )
-                            if problem_text:
-                                break
-
+                problem_text = resolve_problem_text(session_id, meta)
                 if not problem_text:
                     code_key = f"livecoding:{session_id}:code"
                     code_data = cache.get(code_key) or {}
@@ -309,19 +242,7 @@ class LiveCodingFinalEvalReportView(APIView):
 
                 if not problem_text:
                     try:
-                        problem_id = None
-                        if isinstance(meta, dict):
-                            problem_id = meta.get("problem_id")
-                        if not problem_id:
-                            cached_meta = cache.get(meta_key) or {}
-                            if isinstance(cached_meta, dict):
-                                problem_id = cached_meta.get("problem_id")
-                        if problem_id:
-                            problem_row = CodingProblem.objects.filter(
-                                problem_id=problem_id
-                            ).first()
-                            if problem_row:
-                                problem_text = problem_row.problem
+                        problem_text = resolve_problem_text_from_db(session_id, meta)
                     except Exception as exc:
                         logger.exception("report_api DB problem lookup failed: %s", exc)
 
@@ -341,16 +262,7 @@ class LiveCodingFinalEvalReportView(APIView):
                 logger.exception("report_api problem_text load failed: %s", exc)
 
         try:
-            problem_key = f"livecoding:{session_id}:problem"
-            cached_problem = cache.get(problem_key) or {}
-            problem_payload = {
-                "problem_id": cached_problem.get("problem_id"),
-                "problem_text": cached_problem.get("problem")
-                or cached_problem.get("problem_text"),
-                "difficulty": cached_problem.get("difficulty"),
-                "category": cached_problem.get("category"),
-                "algorithm": cached_problem.get("algorithm"),
-            }
+            problem_payload = build_problem_payload(session_id, meta)
             now_local = timezone.localtime(timezone.now(), ZoneInfo("Asia/Seoul"))
             defaults = {
                 "user": user,
@@ -413,19 +325,7 @@ class LiveCodingFinalEvalReportView(APIView):
                 logger.exception("report_api graph queue failed: %s", exc)
 
         try:
-            mapping_key = f"livecoding:user:{user.user_id}:current_session"
-            meta_key = f"livecoding:{session_id}:meta"
-            code_key = f"livecoding:{session_id}:code"
-            problem_key = f"livecoding:{session_id}:problem"
-            anti_cheat_key = f"livecoding:{session_id}:anti-cheat-events"
-
-            current_sid = cache.get(mapping_key)
-            if str(current_sid) == str(session_id):
-                cache.delete(mapping_key)
-            cache.delete(meta_key)
-            cache.delete(code_key)
-            cache.delete(problem_key)
-            cache.delete(anti_cheat_key)
+            clear_livecoding_session_cache(session_id, str(user.user_id))
 
             try:
                 clear_utterances(str(session_id))
@@ -517,18 +417,9 @@ class LiveCodingAntiCheatEventView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        meta = cache.get(meta_key)
-        if not meta:
-            return Response(
-                {"detail": "해당 세션 정보를 찾을 수 없습니다."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if str(meta.get("user_id")) != str(user.user_id):
-            return Response(
-                {"detail": "이 세션에 접근할 권한이 없습니다."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        _, error_response = require_livecoding_owner(user, session_id)
+        if error_response is not None:
+            return error_response
 
         allowed = {
             "typing_paste",
@@ -659,41 +550,7 @@ class LiveCodingReportDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        return Response(
-            {
-                "status": "done",
-                "step": "saved",
-                "session_id": report.session_id,
-                "final_report_markdown": report.report_md or "",
-                "final_score": report.final_score,
-                "final_grade": report.final_grade,
-                "problem_text": (report.problem or {}).get("problem_text")
-                if hasattr(report, "problem")
-                else None,
-                "code_feedback": report.code_feedback,
-                "problem_solving_evaluation": report.problem_solving_evaluation,
-                "initial_strategy": report.initial_strategy,
-                "approach_validity": report.approach_validity,
-                "consistency_status": report.consistency_status,
-                "consistency_feedback": report.consistency_feedback,
-                "submitted_code": report.submitted_code,
-                "annotated_code": report.annotated_code,
-                "strength": report.strength,
-                "improvement": report.improvement,
-                "comprehensive_evaluation": report.comprehensive_evaluation,
-                "anti_cheat_summary": report.anti_cheat_summary,
-                "graph_output": report.graph_output or {},
-                "problem_eval_score": report.problem_eval_score,
-                "problem_eval_feedback": report.problem_eval_feedback,
-                "code_collab_score": report.code_collab_score,
-                "code_collab_feedback": report.code_collab_feedback,
-                "problem_evidence": report.problem_evidence,
-                "code_collab_evidence": report.code_collab_evidence,
-                "created_at": _to_kst_iso(report.created_at),
-                "updated_at": _to_kst_iso(report.updated_at),
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response(serialize_livecoding_report(report), status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
@@ -711,12 +568,37 @@ def save_strategy_answer(request):
     try:
         meta_key = f"livecoding:{session_id}:meta"
         meta = cache.get(meta_key) or {}
-        meta["strategy_answer"] = strategy_answer
+
+        problem_payload = cache.get(f"livecoding:{session_id}:problem") or {}
+        problem_text = (
+            problem_payload.get("problem")
+            or problem_payload.get("problem_text")
+            or meta.get("problem_text")
+            or meta.get("problem_description")
+            or ""
+        )
+        problem_algorithms = (
+            problem_payload.get("algorithm")
+            or meta.get("problem_algorithms")
+            or []
+        )
+        strategy_result = normalize_strategy_answer(
+            strategy_answer,
+            problem_text=str(problem_text or ""),
+            problem_algorithms=problem_algorithms,
+        )
+
+        meta["strategy_answer_raw"] = strategy_result.raw_text
+        meta["strategy_answer_normalized"] = strategy_result.normalized_text
+        meta["strategy_answer"] = strategy_result.normalized_text
+        meta["strategy_algorithms"] = strategy_result.algorithm_tags
+        meta["strategy_confidence"] = strategy_result.confidence
         cache.set(meta_key, meta, timeout=None)
 
         logger.info(
-            "save_strategy stored strategy_answer prefix=%s",
-            strategy_answer[:50],
+            "save_strategy stored strategy_answer raw_prefix=%s normalized_prefix=%s",
+            strategy_result.raw_text[:50],
+            strategy_result.normalized_text[:50],
         )
 
         try:
@@ -729,7 +611,11 @@ def save_strategy_answer(request):
             if checkpoint:
                 channel_values = checkpoint.get("channel_values") or {}
                 chapter1 = channel_values.get("chapter1") or {}
-                chapter1["user_strategy_answer"] = strategy_answer
+                chapter1["user_strategy_answer_raw"] = strategy_result.raw_text
+                chapter1["user_strategy_answer_normalized"] = strategy_result.normalized_text
+                chapter1["user_strategy_answer"] = strategy_result.normalized_text
+                chapter1["strategy_algorithms"] = strategy_result.algorithm_tags
+                chapter1["strategy_confidence"] = strategy_result.confidence
                 channel_values["chapter1"] = chapter1
                 checkpoint["channel_values"] = channel_values
                 checkpointer.put(config, checkpoint)

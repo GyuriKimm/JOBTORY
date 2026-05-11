@@ -1,3 +1,4 @@
+import logging
 import time
 
 from django.core.cache import cache
@@ -5,6 +6,47 @@ from rest_framework import permissions, status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+logger = logging.getLogger(__name__)
+
+ANTI_CHEAT_DEBOUNCE_SECONDS = 5.0
+ANTI_CHEAT_REQUIRED_STREAK = 2
+ANTI_CHEAT_COUNT_COOLDOWN_SECONDS = 15.0
+ANTI_CHEAT_NEUTRAL_REASONS = {"face_not_detected", "pose_calc_failed"}
+
+
+def _load_anti_cheat_state(session_id: str) -> dict:
+    state = cache.get(f"livecoding:{session_id}:anti-cheat") or {}
+    return state if isinstance(state, dict) else {}
+
+
+def _save_anti_cheat_state(session_id: str, state: dict) -> None:
+    cache.set(f"livecoding:{session_id}:anti-cheat", state, timeout=60 * 60)
+
+
+def _should_count_anti_cheat_event(state: dict, detail_reason: str, now: float) -> bool:
+    last_seen_at = float(state.get("last_seen_at") or 0.0)
+    last_counted_at = float(state.get("last_counted_at") or 0.0)
+    last_reason = str(state.get("last_reason") or "")
+    streak = int(state.get("streak") or 0)
+
+    if detail_reason and detail_reason == last_reason and now - last_seen_at <= ANTI_CHEAT_DEBOUNCE_SECONDS:
+        streak += 1
+    else:
+        streak = 1
+
+    state["last_seen_at"] = now
+    state["last_reason"] = detail_reason
+    state["streak"] = streak
+
+    if streak < ANTI_CHEAT_REQUIRED_STREAK:
+        return False
+
+    if now - last_counted_at < ANTI_CHEAT_COUNT_COOLDOWN_SECONDS:
+        return False
+
+    state["last_counted_at"] = now
+    return True
 
 
 class CheatAnalysisView(APIView):
@@ -42,36 +84,49 @@ class CheatAnalysisView(APIView):
 
         data = result.to_dict()
 
-        # 세션 ID가 있으면 간단한 부정행위 카운터를 Redis(캐시)에 기록합니다.
+        # 세션 ID가 있으면 부정행위 이벤트를 Redis(캐시)에 기록합니다.
         if session_id:
-            base_key = f"livecoding:{session_id}:anti-cheat"
             event_key = f"livecoding:{session_id}:anti-cheat-events"
+            cache_data = _load_anti_cheat_state(session_id)
+            detail_reason = str(data.get("detail_reason") or "")
+            now = time.time()
 
             if data.get("is_cheating"):
-                # base_key 하나에 dict 형태로 누적 저장
-                cache_data = cache.get(base_key) or {}
-                cheat_count = int(cache_data.get("cheat_count", 0)) + 1
-                reasons = cache_data.get("reasons", [])
-                if not isinstance(reasons, list):
-                    reasons = []
-                reasons.append(
-                    {
-                        "ts": time.time(),
-                        "cheat_reason": data.get("detail_reason"),
-                    }
-                )
-                cache.set(
-                    base_key,
-                    {"cheat_count": cheat_count, "reasons": reasons},
-                    timeout=60 * 60,
-                )
-                # report용 camera 카운트도 함께 누적
-                event_payload = cache.get(event_key) or {}
-                camera = event_payload.get("camera") or {}
-                camera["mediapipe"] = int(camera.get("mediapipe", 0)) + 1
-                event_payload["camera"] = camera
-                cache.set(event_key, event_payload, timeout=60 * 60)
-   
+                if _should_count_anti_cheat_event(cache_data, detail_reason, now):
+                    cheat_count = int(cache_data.get("cheat_count", 0)) + 1
+                    reasons = cache_data.get("reasons", [])
+                    if not isinstance(reasons, list):
+                        reasons = []
+                    reasons.append(
+                        {
+                            "ts": now,
+                            "cheat_reason": detail_reason or data.get("reason"),
+                            "streak": int(cache_data.get("streak") or 0),
+                        }
+                    )
+                    cache_data["cheat_count"] = cheat_count
+                    cache_data["reasons"] = reasons
+                    _save_anti_cheat_state(session_id, cache_data)
+
+                    event_payload = cache.get(event_key) or {}
+                    camera = event_payload.get("camera") or {}
+                    camera["mediapipe"] = int(camera.get("mediapipe", 0)) + 1
+                    event_payload["camera"] = camera
+                    cache.set(event_key, event_payload, timeout=60 * 60)
+                else:
+                    logger.debug(
+                        "anti-cheat event debounced session_id=%s detail_reason=%s streak=%s",
+                        session_id,
+                        detail_reason,
+                        cache_data.get("streak"),
+                    )
+                    _save_anti_cheat_state(session_id, cache_data)
+            else:
+                if detail_reason in ANTI_CHEAT_NEUTRAL_REASONS:
+                    cache_data["streak"] = 0
+                    cache_data["last_reason"] = detail_reason
+                    cache_data["last_seen_at"] = now
+                    _save_anti_cheat_state(session_id, cache_data)
 
         return Response(data, status=status.HTTP_200_OK)
 

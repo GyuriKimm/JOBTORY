@@ -8,6 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from interview_engine.utils.checkpoint_reader import load_chapter_channel_values
+from interview_engine.utils.strategy_normalizer import resolve_strategy_answer_bundle
 
 from .report_helpers import (
     _clamp01,
@@ -197,65 +198,29 @@ def create_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 problem_text = _safe_str(chap1.get("problem_data") or "")
                 logger.info(f"[DEBUG] checkpoint에서 가져온 문제 길이: {len(problem_text)}")
 
-        # ✅ checkpoint에서 데이터 가져오기
-        initial_strategy = ""
+        # ✅ checkpoint/redis에서 전략 데이터 가져오기
         qa_history: List[Dict[str, Any]] = []
-        
-        if session_id:
-            try:
-                try:
-                    # 1. checkpoint에서 시도
-                    chap1 = load_chapter_channel_values(session_id, "chapter1")
-                    initial_strategy = chap1.get("user_strategy_answer") or ""
-                    
-                    # 2. checkpoint에 없으면 Redis cache에서 시도
-                    if not initial_strategy:
-                        meta_key = f"livecoding:{session_id}:meta"
-                        cached_meta = cache.get(meta_key) or {}
-                        initial_strategy = cached_meta.get("strategy_answer") or ""
-                        logger.info(f"[Fallback] Redis cache에서 전략 답변: {initial_strategy[:50] if initial_strategy else 'None'}")
-                    
-                except Exception as e:
-                    logger.info(f"전략 답변 로드 실패: {e}")
-        
-                # chapter2에서 질문/응답 로그 가져오기
-                chap2 = load_chapter_channel_values(session_id, "chapter2")
-                logger.info(f"[DEBUG] chap2 keys: {chap2.keys() if chap2 else 'None'}")
-        
-                questions = chap2.get("question") or []
-                answers = chap2.get("user_answers") or []
-                logger.info(f"[DEBUG] questions: {len(questions)}, answers: {len(answers)}")
+        strategy_bundle = resolve_strategy_answer_bundle(state, session_id)
+        initial_strategy_raw = strategy_bundle.raw_text
+        initial_strategy = strategy_bundle.normalized_text or strategy_bundle.raw_text
+        logger.info(
+            "[create_report_node] strategy bundle loaded raw_len=%s normalized_len=%s confidence=%.2f",
+            len(initial_strategy_raw),
+            len(initial_strategy),
+            strategy_bundle.confidence,
+        )
 
-                # 첫 번째 답변이 전략 답변일 가능성
-                if not initial_strategy and answers:
-                    initial_strategy = answers[0]
-                    logger.info(f"[Fallback] chapter2 첫 답변 사용: {initial_strategy[:50]}")
-                
-                # ✅ Redis code 데이터에서 확인 (가장 확실한 방법)
-                if not initial_strategy:
-                    code_key = f"livecoding:{session_id}:code"
-                    code_data = cache.get(code_key) or {}
-                    
-                    # question_history에 있을 수 있음
-                    question_history = code_data.get("question_history") or []
-                    if question_history:
-                        # 첫 질문의 답변이 전략일 수 있음
-                        for item in question_history:
-                            if isinstance(item, dict):
-                                answer = item.get("answer") or item.get("stt_text")
-                                if answer:
-                                    initial_strategy = answer
-                                    logger.info(f"[Fallback] question_history 사용: {initial_strategy[:50]}")
-                                    break
-                
-                # ✅ 최후의 수단: 프론트엔드 localStorage
-                # (프론트엔드에서 보낸 경우)
-                if not initial_strategy:
-                    # API를 통해 받았다면
-                    initial_strategy = state.get("initial_strategy") or ""
-                    
-            except Exception as e:
-                logger.info(f"[Data Load Error] {e}")
+        try:
+            chap2 = load_chapter_channel_values(session_id, "chapter2") if session_id else {}
+            logger.info(f"[DEBUG] chap2 keys: {chap2.keys() if chap2 else 'None'}")
+            questions = chap2.get("question") or []
+            answers = chap2.get("user_answers") or []
+            logger.info(f"[DEBUG] questions: {len(questions)}, answers: {len(answers)}")
+        except Exception as e:
+            chap2 = {}
+            questions = []
+            answers = []
+            logger.info(f"[Data Load Error] {e}")
         
         # ✅ LLM을 사용한 상세 피드백 생성
         logger.info("[create_report_node] LLM 피드백 생성 시작...")
@@ -378,6 +343,10 @@ def create_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
             # 문제 해결 능력 평가 추가
             "problem_solving_evaluation": {
                 "initial_strategy": initial_strategy or "초기 전략 답변이 기록되지 않았습니다.",
+                "initial_strategy_raw": initial_strategy_raw,
+                "initial_strategy_normalized": initial_strategy,
+                "strategy_algorithms": strategy_bundle.algorithm_tags,
+                "strategy_confidence": strategy_bundle.confidence,
                 "problem_understanding": ps_evaluation["problem_understanding"],
                 "understanding_feedback": ps_evaluation["understanding_feedback"],
                 "approach_validity": ps_evaluation["approach_validity"],
@@ -393,6 +362,8 @@ def create_report_node(state: Dict[str, Any]) -> Dict[str, Any]:
             # 추가 정보
             "code_feedback": code_feedback,
             "problem_feedback": problem_feedback,
+            "initial_strategy_raw": initial_strategy_raw,
+            "initial_strategy_normalized": initial_strategy,
         }
 
         # 완료 상태

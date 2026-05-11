@@ -1,5 +1,7 @@
 # backend/interview_engine/nodes/problem_solving_eval_node.py
 from __future__ import annotations
+import logging
+
 from interview_engine.utils.checkpoint_reader import load_chapter_channel_values
 from interview_engine.llm import get_llm
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -9,10 +11,10 @@ import json
 
 from django.core.cache import cache
 from django.db import connection
+from .eval_utils import _safe_str
+from interview_engine.utils.strategy_normalizer import resolve_strategy_answer_bundle
 
-
-def _safe_str(x: Any) -> str:
-    return "" if x is None else str(x)
+logger = logging.getLogger(__name__)
 
 
 STRATEGY_KEYWORDS = {
@@ -303,6 +305,19 @@ STRATEGY_KEYWORDS = {
 
 # ==================== LLM 테스트 케이스 평가 ====================
 
+
+def _format_test_case_log(results: List[Dict[str, Any]]) -> None:
+    for r in results:
+        status = "PASS" if r.get("passed") else "FAIL"
+        logger.debug(
+            "LLM test case %s: %s | input=%r | expected=%r | reason=%s",
+            r.get("case_index", 0) + 1,
+            status,
+            r.get("input"),
+            r.get("expected"),
+            r.get("reason"),
+        )
+
 def _evaluate_test_cases_with_llm(
     user_code: str, 
     test_cases: List[Dict[str, Any]], 
@@ -398,24 +413,14 @@ def _evaluate_test_cases_with_llm(
                     "reason": r.get("reason", "")
                 })
         
-        # ✅ 상세 로그 출력
-        print(f"\n{'='*60}")
-        print(f"[LLM 테스트 평가 결과]")
-        print(f"{'='*60}")
-        print(f"총 테스트: {total}개")
-        print(f"통과: {passed}개 | 실패: {total - passed}개")
-        print(f"통과율: {pass_rate:.2%}")
-        print(f"{'-'*60}")
-        
-        for r in formatted_results:
-            status = "✅ PASS" if r["passed"] else "❌ FAIL"
-            print(f"케이스 {r['case_index'] + 1}: {status}")
-            print(f"  Input: {r['input']}")
-            print(f"  Expected: {r['expected']}")
-            print(f"  판단: {r['reason']}")
-            print(f"{'-'*60}")
-        
-        print(f"{'='*60}\n")
+        logger.info(
+            "LLM test evaluation finished total=%s passed=%s failed=%s pass_rate=%.2f%%",
+            total,
+            passed,
+            total - passed,
+            pass_rate * 100,
+        )
+        _format_test_case_log(formatted_results)
         
         return {
             "passed": passed,
@@ -426,9 +431,7 @@ def _evaluate_test_cases_with_llm(
         }
         
     except Exception as e:
-        print(f"[ERROR] LLM 테스트 평가 실패: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("LLM test evaluation failed: %s", e)
         
         return {
             "passed": 0,
@@ -509,7 +512,7 @@ def _get_test_cases_from_db(problem_id: int) -> List[Dict[str, Any]]:
             
             return test_cases
     except Exception as e:
-        print(f"[ERROR] DB 테스트 케이스 조회 실패: {e}")
+        logger.exception("DB test case lookup failed: %s", e)
         return []
 
 
@@ -1042,25 +1045,19 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
     code = cache_code.strip() or ckpt_code.strip()
     starter_code = _safe_str(cached_meta.get("starter_code") or chap2.get("starter_code") or "")
     
-    # ✅ 전략 답변 - 우선순위: Redis > checkpoint
-    strategy_text = ""
-    
-    # 1순위: Redis meta
-    if cached_meta.get("strategy_answer"):
-        strategy_text = _safe_str(cached_meta.get("strategy_answer"))
-        print(f"[전략] Redis meta에서 가져옴: {len(strategy_text)}자 - '{strategy_text[:50]}...'", flush=True)
-    
-    # 2순위: checkpoint
+    strategy_bundle = resolve_strategy_answer_bundle(state, session_id)
+    strategy_text = strategy_bundle.normalized_text or strategy_bundle.raw_text
+    initial_strategy_raw = strategy_bundle.raw_text
+    logger.info(
+        "strategy bundle loaded raw_len=%s normalized_len=%s confidence=%.2f",
+        len(initial_strategy_raw),
+        len(strategy_text),
+        strategy_bundle.confidence,
+    )
     if not strategy_text:
-        strategy_text = _safe_str(chap1.get("user_strategy_answer") or "")
-        if strategy_text:
-            print(f"[전략] checkpoint에서 가져옴: {len(strategy_text)}자 - '{strategy_text[:50]}...'", flush=True)
-    
-    # 디버깅 로그
-    if not strategy_text:
-        print(f"[WARNING] 전략 답변을 찾을 수 없습니다!", flush=True)
-        print(f"[DEBUG] cached_meta keys: {list(cached_meta.keys())}", flush=True)
-        print(f"[DEBUG] chap1 keys: {list(chap1.keys()) if chap1 else 'None'}", flush=True)
+        logger.warning("strategy answer not found")
+        logger.debug("cached_meta keys=%s", list(cached_meta.keys()))
+        logger.debug("chap1 keys=%s", list(chap1.keys()) if chap1 else "None")
     
     problem_id = cached_meta.get("problem_id")
     problem_algorithms: List[str] = []
@@ -1088,7 +1085,7 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
             function_name = problem_payload.get("function_name")
             
             if function_name:
-                print(f"[DEBUG] Redis에서 function_name 가져옴: {function_name}", flush=True)
+                logger.debug("function_name loaded from redis problem payload: %s", function_name)
             
             # ✅ 2순위: DB 조회
             if not function_name:
@@ -1102,7 +1099,7 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     row = cursor.fetchone()
                     if row and row[0]:
                         function_name = row[0]
-                        print(f"[DEBUG] DB에서 function_name 가져옴: {function_name}", flush=True)
+                        logger.debug("function_name loaded from db: %s", function_name)
 
             if not problem_algorithms:
                 with connection.cursor() as cursor:
@@ -1130,16 +1127,20 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 match = re.search(r'def\s+(\w+)\s*\(', code)
                 if match:
                     function_name = match.group(1)
-                    print(f"[DEBUG] 코드에서 function_name 추출: {function_name}", flush=True)
+                    logger.debug("function_name inferred from code: %s", function_name)
                 else:
                     function_name = "solution"
-                    print(f"[WARNING] function_name을 찾을 수 없어 기본값 사용: {function_name}", flush=True)
+                    logger.warning("function_name not found; fallback=%s", function_name)
             
             # 테스트 케이스 가져오기
             test_cases = _get_test_cases_from_db(problem_id)
             
             if test_cases:
-                print(f"[INFO] LLM으로 {len(test_cases[:10])}개 테스트 케이스 평가 시작... (함수명: {function_name})")
+                logger.info(
+                    "starting llm test evaluation count=%s function_name=%s",
+                    len(test_cases[:10]),
+                    function_name,
+                )
                 # ✅ LLM으로 평가!
                 test_results = _evaluate_test_cases_with_llm(
                     user_code=code,
@@ -1147,16 +1148,18 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     problem_text=problem_text,
                     function_name=function_name
                 )
-                print(f"[INFO] LLM 평가 완료: {test_results['passed']}/{test_results['total']} 통과")
+                logger.info(
+                    "llm test evaluation done passed=%s total=%s",
+                    test_results["passed"],
+                    test_results["total"],
+                )
             else:
-                print(f"[WARNING] problem_id={problem_id}에 대한 테스트 케이스가 없습니다")
+                logger.warning("no test cases for problem_id=%s", problem_id)
         except Exception as e:
-            print(f"[WARNING] 테스트 평가 중 오류: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("test evaluation failed: %s", e)
     else:
         if not problem_id:
-            print(f"[WARNING] problem_id를 찾을 수 없어 테스트를 건너뜁니다")
+            logger.warning("problem_id missing; skipping test evaluation")
     
     # ========== 35점 평가 ==========
     total_score, feedback_list = _evaluate_35_points(
@@ -1177,13 +1180,20 @@ def problem_solving_eval_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "starter_code": starter_code,
         "test_results": test_results,
         "strategy_answer": strategy_text,
-        "strategy_algorithms": _extract_strategy_algorithms(strategy_text),
+        "strategy_answer_raw": initial_strategy_raw,
+        "strategy_answer_normalized": strategy_bundle.normalized_text,
+        "strategy_algorithms": strategy_bundle.algorithm_tags,
+        "strategy_confidence": strategy_bundle.confidence,
         "chapter2_questions": chap2.get("question") or [],
         "hint_conversation_log": hint.get("conversation_log") or [],
     }
     
-    print(f"[problem_solving_eval_node] 완료 - {total_score:.2f}/35점 (스케일: {total_score/35.0:.4f})")
-    print(f"[DEBUG] problem_evidence.submitted_code 길이: {len(code)}")
+    logger.info(
+        "problem_solving_eval_node finished total_score=%.2f scale=%.4f code_len=%s",
+        total_score,
+        total_score / 35.0,
+        len(code),
+    )
     
     state["status"] = "done"
     return state

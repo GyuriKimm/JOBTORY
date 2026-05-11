@@ -12,6 +12,14 @@ from .authentication import JWTAuthentication
 from .interview_utils import _generate_tts_payload, get_cached_graph
 from .models import CodingProblemLanguage, TestCase, User
 from .stt_buffer import clear_utterances
+from .session_utils import (
+    get_livecoding_code_key,
+    get_livecoding_current_session_key,
+    get_livecoding_meta_key,
+    get_livecoding_problem_key,
+    load_livecoding_meta,
+    require_livecoding_owner,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,14 +90,14 @@ class LiveCodingStartView(APIView):
             "algorithm": problem_data["algorithm"],
         }
 
-        cache.set(f"livecoding:{session_id}:meta", meta, timeout=None)
+        cache.set(get_livecoding_meta_key(session_id), meta, timeout=None)
         cache.set(
-            f"livecoding:{session_id}:problem",
+            get_livecoding_problem_key(session_id),
             problem_payload,
             timeout=None,
         )
         cache.set(
-            f"livecoding:user:{user.user_id}:current_session",
+            get_livecoding_current_session_key(user.user_id),
             session_id,
             timeout=None,
         )
@@ -116,27 +124,7 @@ class LiveCodingCodeSnapshotView(APIView):
     """
 
     def _get_and_validate_meta(self, user, session_id: str):
-        if not session_id:
-            return None, Response(
-                {"detail": "session_id가 필요합니다."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        meta_key = f"livecoding:{session_id}:meta"
-        meta = cache.get(meta_key)
-        if not meta:
-            return None, Response(
-                {"detail": "해당 세션 정보를 찾을 수 없습니다."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if str(meta.get("user_id")) != str(getattr(user, "user_id", None)):
-            return None, Response(
-                {"detail": "이 세션에 접근할 권한이 없습니다."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        return meta, None
+        return require_livecoding_owner(user, session_id)
 
     def post(self, request):
         user = getattr(request, "user", None)
@@ -169,7 +157,7 @@ class LiveCodingCodeSnapshotView(APIView):
             "saved_at": timezone.now().isoformat(),
         }
 
-        key = f"livecoding:{session_id}:code"
+        key = get_livecoding_code_key(session_id)
         data = cache.get(key) or {}
         history = data.get("history") or []
         is_first_snapshot = len(history) == 0
@@ -205,7 +193,7 @@ class LiveCodingCodeSnapshotView(APIView):
         if error_response is not None:
             return error_response
 
-        key = f"livecoding:{session_id}:code"
+        key = get_livecoding_code_key(session_id)
         data = cache.get(key) or {}
         if not data:
             return Response(
@@ -272,19 +260,9 @@ class LiveCodingHintView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        meta = cache.get(meta_key)
-        if not meta:
-            return Response(
-                {"detail": "해당 세션 정보를 찾을 수 없습니다."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if str(meta.get("user_id")) != str(user.user_id):
-            return Response(
-                {"detail": "본인 세션에만 접근할 수 있습니다."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        meta, error_response = require_livecoding_owner(user, session_id)
+        if error_response is not None:
+            return error_response
 
         language = (data.get("language") or meta.get("language") or "").lower() or None
         code = data.get("code") or ""
@@ -397,7 +375,7 @@ class LiveCodingHintView(APIView):
             meta["hint_count"] = int(new_hint_count)
         except Exception:
             meta["hint_count"] = new_hint_count
-        cache.set(meta_key, meta, timeout=None)
+        cache.set(get_livecoding_meta_key(session_id), meta, timeout=None)
 
         return Response(
             {
@@ -436,23 +414,11 @@ class LiveCodingSessionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        problem_key = f"livecoding:{session_id}:problem"
+        meta, error_response = require_livecoding_owner(user, session_id)
+        if error_response is not None:
+            return error_response
 
-        meta = cache.get(meta_key)
-        if not meta:
-            return Response(
-                {"detail": "해당 세션 정보를 찾을 수 없습니다."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if str(meta.get("user_id")) != str(user.user_id):
-            return Response(
-                {"detail": "이 세션에 접근할 권한이 없습니다."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        problem = cache.get(problem_key) or {}
+        problem = cache.get(get_livecoding_problem_key(session_id)) or {}
         if not problem:
             return Response(
                 {"detail": "세션의 문제 정보를 찾을 수 없습니다."},
@@ -491,7 +457,7 @@ class LiveCodingSessionView(APIView):
                 ]
                 try:
                     problem["test_cases"] = test_cases
-                    cache.set(problem_key, problem, timeout=None)
+                    cache.set(get_livecoding_problem_key(session_id), problem, timeout=None)
                 except Exception:
                     pass
             except Exception:
@@ -561,7 +527,7 @@ class LiveCodingActiveSessionView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        mapping_key = f"livecoding:user:{user.user_id}:current_session"
+        mapping_key = get_livecoding_current_session_key(user.user_id)
         session_id = cache.get(mapping_key)
         if not session_id:
             return Response(
@@ -569,10 +535,8 @@ class LiveCodingActiveSessionView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        problem_key = f"livecoding:{session_id}:problem"
-        meta = cache.get(meta_key)
-        problem = cache.get(problem_key)
+        meta = load_livecoding_meta(session_id)
+        problem = cache.get(get_livecoding_problem_key(session_id))
         if not meta or not problem:
             try:
                 cache.delete(mapping_key)
@@ -583,7 +547,7 @@ class LiveCodingActiveSessionView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        if meta.get("user_id") != str(user.user_id):
+        if str(meta.get("user_id")) != str(user.user_id):
             return Response(
                 {"detail": "이 세션에 접근할 권한이 없습니다."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -678,7 +642,7 @@ class LiveCodingEndSessionView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        mapping_key = f"livecoding:user:{user.user_id}:current_session"
+        mapping_key = get_livecoding_current_session_key(user.user_id)
         session_id = cache.get(mapping_key)
         if not session_id:
             return Response(
@@ -686,14 +650,10 @@ class LiveCodingEndSessionView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        code_key = f"livecoding:{session_id}:code"
-        problem_key = f"livecoding:{session_id}:problem"
+        cache.delete(get_livecoding_meta_key(session_id))
+        cache.delete(get_livecoding_code_key(session_id))
+        cache.delete(get_livecoding_problem_key(session_id))
         anti_cheat_key = f"livecoding:{session_id}:anti-cheat-events"
-
-        cache.delete(meta_key)
-        cache.delete(code_key)
-        cache.delete(problem_key)
         cache.delete(anti_cheat_key)
         cache.delete(mapping_key)
 
@@ -739,23 +699,13 @@ class CodingQuestionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        meta_key = f"livecoding:{session_id}:meta"
-        problem_key = f"livecoding:{session_id}:problem"
-        code_key = f"livecoding:{session_id}:code"
+        meta, error_response = require_livecoding_owner(user, session_id)
+        if error_response is not None:
+            return error_response
+
+        problem_key = get_livecoding_problem_key(session_id)
+        code_key = get_livecoding_code_key(session_id)
         code_data = cache.get(code_key) or {}
-
-        meta = cache.get(meta_key) or {}
-        if not meta:
-            return Response(
-                {"detail": "해당 세션 정보를 찾을 수 없습니다."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        if str(meta.get("user_id")) != str(getattr(user, "user_id", None)):
-            return Response(
-                {"detail": "이 세션에 접근할 권한이 없습니다."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         problem = cache.get(problem_key) or {}
 
         question_cnt = int(code_data.get("question_cnt") or 0)
@@ -862,7 +812,7 @@ class CodingQuestionView(APIView):
 
         code_data["question_cnt"] = question_cnt + 1
         code_data["last_question_text"] = question_text
-        cache.set(meta_key, meta, timeout=None)
+        cache.set(get_livecoding_meta_key(session_id), meta, timeout=None)
 
         question_history.append(latest)
         if len(question_history) > 50:
@@ -870,7 +820,7 @@ class CodingQuestionView(APIView):
         code_data["question_history"] = question_history
         cache.set(code_key, code_data, timeout=None)
         try:
-            mapping_key = f"livecoding:user:{user.user_id}:current_session"
+            mapping_key = get_livecoding_current_session_key(user.user_id)
             cache.set(mapping_key, session_id, timeout=None)
         except Exception:
             pass
